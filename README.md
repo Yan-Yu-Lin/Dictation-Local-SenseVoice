@@ -37,6 +37,80 @@ uv run python dictation.py --chinese cn
 
 ---
 
+## Benchmark Tools
+
+This repo includes tools for benchmarking ASR models.
+
+### Audio Recorder (`record_audio.py`)
+
+Records audio clips for benchmark testing using the same global hotkey as the dictation app.
+
+```bash
+uv run python record_audio.py
+# Press Cmd+Option+Control+D to start/stop recording
+# Files saved to ./recordings/ as 16kHz mono WAV
+```
+
+### Basic Benchmark (`benchmark.py`)
+
+Compares multiple ASR models on your recorded audio files:
+
+| Model | Type | Notes |
+|-------|------|-------|
+| ElevenLabs Scribe v2 | Cloud API | Requires `ELEVENLABS_API_KEY` in `.env` |
+| SenseVoice | Local | MPS/CUDA/CPU |
+| Paraformer | Local | CPU only (MPS hangs) |
+| Fun-ASR-Nano | Local | LLM-based, MPS/CUDA/CPU |
+
+```bash
+# Run benchmark on all recordings
+uv run python benchmark.py
+
+# Specify folder and output
+uv run python benchmark.py --folder ./my_recordings --output results.md
+
+# Run specific models only
+uv run python benchmark.py --models sensevoice paraformer
+```
+
+Output: `results/benchmark_results.md`
+
+### YouTube Benchmark (`benchmark_youtube.py`)
+
+Compares ASR models against YouTube's original transcript (ground truth). Includes advanced metrics:
+
+- **CER (Character Error Rate)** - Edit distance / reference length
+- **RTF (Real-Time Factor)** - Processing time / audio duration
+- **RAM tracking** - Memory usage per model
+- **OpenCC conversion** - Normalizes Simplified → Traditional Chinese for fair comparison
+
+```bash
+# Run with default YouTube test segments
+uv run python benchmark_youtube.py
+
+# Specify models
+uv run python benchmark_youtube.py --models elevenlabs sensevoice
+```
+
+Output: `results/youtube_benchmark_results.md`
+
+#### Creating Test Segments
+
+To benchmark with a new YouTube video:
+
+```bash
+# Download audio and subtitles
+yt-dlp -x --audio-format wav -o "youtube_test/video.wav" "VIDEO_URL"
+yt-dlp --write-subs --sub-lang zh-Hant --skip-download -o "youtube_test/%(id)s" "VIDEO_URL"
+
+# Extract segments (example: 33s-50s)
+ffmpeg -i youtube_test/video.wav -ss 00:00:33 -to 00:00:50 -ar 16000 -ac 1 youtube_test/segment_01.wav
+```
+
+Then update the segment configs in `benchmark_youtube.py`.
+
+---
+
 ## About SenseVoice
 
 ### Overview

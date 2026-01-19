@@ -45,7 +45,7 @@ from pydub import AudioSegment
 # Script directory for model paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_RECORDINGS_DIR = os.path.join(SCRIPT_DIR, "recordings")
-DEFAULT_OUTPUT_FILE = os.path.join(SCRIPT_DIR, "benchmark_results.md")
+DEFAULT_OUTPUT_FILE = os.path.join(SCRIPT_DIR, "results", "benchmark_results.md")
 
 
 def get_device_info():

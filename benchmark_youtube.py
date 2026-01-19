@@ -621,7 +621,7 @@ def main():
     )
     parser.add_argument(
         '--output', '-o',
-        default=os.path.join(SCRIPT_DIR, "youtube_benchmark_results.md"),
+        default=os.path.join(SCRIPT_DIR, "results", "youtube_benchmark_results.md"),
         help='Output markdown file'
     )
     parser.add_argument(
