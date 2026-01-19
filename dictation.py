@@ -98,11 +98,17 @@ MODELS = {
     "paraformer": "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",  # ~889MB
     "paraformer-large": "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
     "paraformer-zh": "iic/speech_paraformer_asr_nat-zh-cn-16k-common-vocab8358-tensorflow1",  # Smaller
+    # Fun-ASR-Nano (LLM-based, 31 languages, dialects support)
+    "nano": "FunAudioLLM/Fun-ASR-Nano-2512",  # ~800M params, zh/en/ja + dialects
+    "fun-asr-nano": "FunAudioLLM/Fun-ASR-Nano-2512",
 }
+
+# Get the directory where this script is located (for remote_code)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def load_sensevoice_model(model_size="small", force_device=None):
-    """Load the SenseVoice model"""
+    """Load the ASR model (SenseVoice, Paraformer, or Fun-ASR-Nano)"""
     print("Importing libraries...", end=" ", flush=True)
     from funasr import AutoModel
     import torch
@@ -112,21 +118,23 @@ def load_sensevoice_model(model_size="small", force_device=None):
     model_name = model_id.split("/")[-1]
     download_size = "~2GB" if "Large" in model_id else "~800MB"
 
-    # SenseVoice needs trust_remote_code, Paraformer doesn't
+    # Detect model type
     is_sensevoice = "sensevoice" in model_id.lower()
     is_paraformer = "paraformer" in model_id.lower()
+    is_fun_asr_nano = "fun-asr" in model_id.lower() or "funaudiollm" in model_id.lower()
 
     # Detect best device
     if force_device:
         device = force_device
         print(f"Device: {device} (forced)")
     elif torch.backends.mps.is_available():
-        # Paraformer has known issues with MPS (PyTorch LSTM memory leaks,
-        # CIF predictor uses complex tensor ops with boolean indexing).
-        # SenseVoice works fine on MPS as it uses simpler CTC architecture.
+        # Paraformer and Fun-ASR-Nano (LLM-based) have known issues with MPS
         if is_paraformer:
             print("Warning: Paraformer has known MPS compatibility issues.")
             print("         If you experience hangs, try: --device cpu")
+        if is_fun_asr_nano:
+            print("Warning: Fun-ASR-Nano MPS compatibility is untested.")
+            print("         If you experience issues, try: --device cpu")
         device = "mps"
         print("Device: Apple Silicon GPU (MPS)")
     elif torch.cuda.is_available():
@@ -139,32 +147,46 @@ def load_sensevoice_model(model_size="small", force_device=None):
     print(f"Model: {model_name}")
     print(f"Loading model... (first run downloads {download_size})", flush=True)
 
-    model_kwargs = {
-        "model": model_id,
-        "trust_remote_code": is_sensevoice,
-        "device": device,
-        "disable_update": True,
-        # VAD for all models
-        "vad_model": "fsmn-vad",
-        "vad_kwargs": {"max_single_segment_time": 30000},
-    }
-
-    # Paraformer needs separate punctuation model (SenseVoice has it built-in)
-    if is_paraformer:
-        model_kwargs["punc_model"] = "ct-punc"
+    # Build model kwargs based on model type
+    if is_fun_asr_nano:
+        # Fun-ASR-Nano needs local model.py for custom architecture
+        remote_code_path = os.path.join(SCRIPT_DIR, "fun_asr_nano_model.py")
+        model_kwargs = {
+            "model": model_id,
+            "trust_remote_code": True,
+            "remote_code": remote_code_path,
+            "device": device,
+            # VAD optional for Fun-ASR-Nano
+            "vad_model": "fsmn-vad",
+            "vad_kwargs": {"max_single_segment_time": 30000},
+        }
+    else:
+        model_kwargs = {
+            "model": model_id,
+            "trust_remote_code": is_sensevoice,
+            "device": device,
+            "disable_update": True,
+            # VAD for all models
+            "vad_model": "fsmn-vad",
+            "vad_kwargs": {"max_single_segment_time": 30000},
+        }
+        # Paraformer needs separate punctuation model (SenseVoice has it built-in)
+        if is_paraformer:
+            model_kwargs["punc_model"] = "ct-punc"
 
     model = AutoModel(**model_kwargs)
 
     print("Model loaded!")
-    return model
+    return model, is_fun_asr_nano  # Return flag for different generate() handling
 
 
 class DictationApp:
-    def __init__(self, chinese='tw', model=None):
+    def __init__(self, chinese='tw', model=None, is_fun_asr_nano=False):
         self.is_recording = False
         self.audio_chunks = []
         self.recording_thread = None
         self.stop_event = threading.Event()
+        self.is_fun_asr_nano = is_fun_asr_nano  # Different generate() params
 
         # Initialize Chinese character converter
         self.chinese_variant = chinese
@@ -174,7 +196,9 @@ class DictationApp:
             self.chinese_converter = opencc.OpenCC('t2s')
 
         # Use provided model or load new one
-        self.model = model if model else load_sensevoice_model()
+        if model is None:
+            model, self.is_fun_asr_nano = load_sensevoice_model()
+        self.model = model
 
         # # LLM post-processing disabled for now
         # # Initialize OpenRouter client (optional - for Chinese punctuation)
@@ -278,18 +302,33 @@ class DictationApp:
 
         # Run in thread pool to not block event loop
         loop = asyncio.get_event_loop()
-        res = await loop.run_in_executor(
-            None,
-            lambda: self.model.generate(
-                input=audio_path,
-                cache={},
-                language="auto",
-                use_itn=True,
-                batch_size_s=60,
-                merge_vad=True,
-                merge_length_s=15,
+
+        if self.is_fun_asr_nano:
+            # Fun-ASR-Nano has different generate() parameters
+            res = await loop.run_in_executor(
+                None,
+                lambda: self.model.generate(
+                    input=[audio_path],  # List format
+                    cache={},
+                    batch_size=1,
+                    language="auto",  # or "中文", "英文", "日文"
+                    itn=True,  # Different param name
+                )
             )
-        )
+        else:
+            # SenseVoice / Paraformer
+            res = await loop.run_in_executor(
+                None,
+                lambda: self.model.generate(
+                    input=audio_path,
+                    cache={},
+                    language="auto",
+                    use_itn=True,
+                    batch_size_s=60,
+                    merge_vad=True,
+                    merge_length_s=15,
+                )
+            )
 
         # Reset thread count after inference to prevent drift
         torch.set_num_threads(4)
@@ -297,7 +336,7 @@ class DictationApp:
         if res and res[0].get("text"):
             text = res[0]["text"]
             # SenseVoice outputs emotion/event tags that need postprocessing
-            # Paraformer outputs plain text - postprocess handles both gracefully
+            # Paraformer and Fun-ASR-Nano output plain text
             try:
                 from funasr.utils.postprocess_utils import rich_transcription_postprocess
                 return rich_transcription_postprocess(text)
@@ -385,7 +424,7 @@ class AppDelegate(NSObject):
         print("Press Ctrl+C to exit.\n")
 
 
-def setup_async_loop(chinese, model):
+def setup_async_loop(chinese, model, is_fun_asr_nano):
     """Set up the async event loop in a separate thread."""
     global app, event_loop
 
@@ -395,7 +434,7 @@ def setup_async_loop(chinese, model):
     event_loop = loop
 
     # Create app instance (model already loaded)
-    app = DictationApp(chinese=chinese, model=model)
+    app = DictationApp(chinese=chinese, model=model, is_fun_asr_nano=is_fun_asr_nano)
 
     # Signal that initialization is complete
     async_loop_ready.set()
@@ -408,12 +447,12 @@ def start_app(chinese='tw', model_size='small', device=None):
     """Start the application with NSApplication event loop."""
     # Load model in main thread so user sees progress
     print("=" * 50)
-    print("  SenseVoice Local Dictation")
+    print("  Local Dictation (SenseVoice / Paraformer / Fun-ASR-Nano)")
     print("=" * 50)
-    model = load_sensevoice_model(model_size, force_device=device)
+    model, is_fun_asr_nano = load_sensevoice_model(model_size, force_device=device)
 
     # Start asyncio event loop in a separate thread
-    async_thread = threading.Thread(target=setup_async_loop, args=(chinese, model), daemon=True)
+    async_thread = threading.Thread(target=setup_async_loop, args=(chinese, model, is_fun_asr_nano), daemon=True)
     async_thread.start()
 
     # Wait for the async thread to initialize
@@ -442,7 +481,7 @@ def start_app(chinese='tw', model_size='small', device=None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description='Dictation app using local SenseVoice model (offline STT)'
+        description='Dictation app using local ASR models (offline STT)'
     )
     parser.add_argument(
         '--chinese',
@@ -453,7 +492,7 @@ if __name__ == "__main__":
     parser.add_argument(
         '--model', '-m',
         default='small',
-        help='Model: small/sensevoice (default, multilingual), paraformer/paraformer-large (Chinese, faster), or custom model ID'
+        help='Model: small/sensevoice (default), paraformer (Chinese), nano/fun-asr-nano (31 langs + dialects)'
     )
     parser.add_argument(
         '--device', '-d',
