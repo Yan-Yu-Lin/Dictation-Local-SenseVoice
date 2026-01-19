@@ -105,8 +105,9 @@ result = model.generate(
 
 On Apple Silicon (M3 Pro):
 - **RAM usage**: ~1-1.5 GB total
-- **RTF (Real-Time Factor)**: ~0.3-0.5x (faster than real-time)
+- **RTF (Real-Time Factor)**: ~0.04-0.2x (much faster than real-time)
 - **First load**: Downloads model (~800MB), caches to `~/.cache/modelscope/`
+- **CPU vs GPU**: Both are fast for short dictation clips. A dedicated GPU (like 5070 Ti) would be overkill.
 
 ### Framework: FunASR
 
@@ -114,13 +115,74 @@ SenseVoice runs on **FunASR**, Alibaba's open-source speech recognition toolkit.
 
 ```
 FunASR (Fundamental ASR)
-├── SenseVoice - Multilingual ASR
-├── Paraformer - Chinese ASR
-├── Whisper - OpenAI Whisper wrapper
-└── Various VAD, punctuation models
+├── ASR Models (transcription)
+│   ├── SenseVoice - Multilingual ASR + emotion + events
+│   ├── Paraformer - Chinese-focused ASR
+│   └── Whisper - OpenAI Whisper wrapper
+├── VAD Models (voice activity detection)
+│   └── fsmn-vad - Detects speech vs silence, splits audio
+├── Punctuation Models
+│   └── ct-punc - Chinese punctuation restoration
+└── Other Models (emotion, speaker diarization, etc.)
 ```
 
 GitHub: https://github.com/modelscope/FunASR
+
+---
+
+## Model Comparison: SenseVoice vs Paraformer
+
+This app supports multiple ASR models. Here's what we found from testing:
+
+### SenseVoice (Default, Recommended)
+
+```bash
+uv run python dictation.py                    # Uses SenseVoice
+uv run python dictation.py --model sensevoice
+```
+
+| Feature | Status |
+|---------|--------|
+| Chinese ASR | ✅ Excellent |
+| English ASR | ✅ Good |
+| Japanese/Korean/Cantonese | ✅ Good |
+| Punctuation | ✅ Built-in |
+| Emotion detection | ✅ Built-in |
+| Apple Silicon MPS | ✅ Works |
+
+### Paraformer (Chinese-focused alternative)
+
+```bash
+uv run python dictation.py --model paraformer --device cpu
+```
+
+| Feature | Status |
+|---------|--------|
+| Chinese ASR | ✅ Excellent |
+| English ASR | ⚠️ Works but not optimized |
+| Punctuation | ✅ Via `ct-punc` (Chinese only) |
+| Apple Silicon MPS | ❌ **Hangs** (known issue, use `--device cpu`) |
+
+### MPS (Apple Silicon GPU) Compatibility
+
+| Model | MPS Status | Notes |
+|-------|------------|-------|
+| SenseVoice | ✅ Works | Simple CTC architecture |
+| Paraformer | ❌ Hangs | CIF + LSTM ops have PyTorch MPS bugs |
+| fsmn-vad | ✅ Works | - |
+| ct-punc | ✅ Works | - |
+
+**Root cause**: Paraformer uses CIF predictor with LSTM and complex tensor operations (boolean indexing, cumsum) that have known issues on PyTorch MPS backend. See [PyTorch #145374](https://github.com/pytorch/pytorch/issues/145374), [FunASR #2652](https://github.com/modelscope/FunASR/issues/2652).
+
+**Workaround**: Use `--device cpu` for Paraformer. CPU is fast enough for dictation (RTF ~0.04-0.08).
+
+### Recommendation
+
+For multilingual dictation on Mac, **SenseVoice is the better choice**:
+- Works on MPS (GPU acceleration)
+- Good English + Chinese support
+- Built-in punctuation for all languages
+- Emotion/event detection as bonus
 
 ---
 

@@ -92,19 +92,41 @@ def contains_chinese(text: str) -> bool:
 # Available models
 # Note: SenseVoiceLarge exists but is NOT publicly released
 MODELS = {
-    "small": "iic/SenseVoiceSmall",   # ~800MB - the only publicly available model
+    "small": "iic/SenseVoiceSmall",   # ~800MB - multilingual ASR + emotion + events
+    "sensevoice": "iic/SenseVoiceSmall",  # Alias
+    # Paraformer models (Chinese-focused, faster, ASR only - no emotion/events)
+    "paraformer": "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",  # ~889MB
+    "paraformer-large": "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
+    "paraformer-zh": "iic/speech_paraformer_asr_nat-zh-cn-16k-common-vocab8358-tensorflow1",  # Smaller
 }
 
 
-def load_sensevoice_model(model_size="small"):
+def load_sensevoice_model(model_size="small", force_device=None):
     """Load the SenseVoice model"""
     print("Importing libraries...", end=" ", flush=True)
     from funasr import AutoModel
     import torch
     print("done")
 
+    model_id = MODELS.get(model_size, model_size)  # Allow custom model ID too
+    model_name = model_id.split("/")[-1]
+    download_size = "~2GB" if "Large" in model_id else "~800MB"
+
+    # SenseVoice needs trust_remote_code, Paraformer doesn't
+    is_sensevoice = "sensevoice" in model_id.lower()
+    is_paraformer = "paraformer" in model_id.lower()
+
     # Detect best device
-    if torch.backends.mps.is_available():
+    if force_device:
+        device = force_device
+        print(f"Device: {device} (forced)")
+    elif torch.backends.mps.is_available():
+        # Paraformer has known issues with MPS (PyTorch LSTM memory leaks,
+        # CIF predictor uses complex tensor ops with boolean indexing).
+        # SenseVoice works fine on MPS as it uses simpler CTC architecture.
+        if is_paraformer:
+            print("Warning: Paraformer has known MPS compatibility issues.")
+            print("         If you experience hangs, try: --device cpu")
         device = "mps"
         print("Device: Apple Silicon GPU (MPS)")
     elif torch.cuda.is_available():
@@ -114,21 +136,24 @@ def load_sensevoice_model(model_size="small"):
         device = "cpu"
         print("Device: CPU")
 
-    model_id = MODELS.get(model_size, model_size)  # Allow custom model ID too
-    model_name = model_id.split("/")[-1]
-    download_size = "~2GB" if "Large" in model_id else "~800MB"
-
     print(f"Model: {model_name}")
     print(f"Loading model... (first run downloads {download_size})", flush=True)
 
-    model = AutoModel(
-        model=model_id,
-        trust_remote_code=True,
-        vad_model="fsmn-vad",
-        vad_kwargs={"max_single_segment_time": 30000},
-        device=device,
-        disable_update=True,
-    )
+    model_kwargs = {
+        "model": model_id,
+        "trust_remote_code": is_sensevoice,
+        "device": device,
+        "disable_update": True,
+        # VAD for all models
+        "vad_model": "fsmn-vad",
+        "vad_kwargs": {"max_single_segment_time": 30000},
+    }
+
+    # Paraformer needs separate punctuation model (SenseVoice has it built-in)
+    if is_paraformer:
+        model_kwargs["punc_model"] = "ct-punc"
+
+    model = AutoModel(**model_kwargs)
 
     print("Model loaded!")
     return model
@@ -243,8 +268,13 @@ class DictationApp:
             os.unlink(temp_path)
 
     async def transcribe(self, audio_path):
-        """Transcribe audio using SenseVoice"""
-        from funasr.utils.postprocess_utils import rich_transcription_postprocess
+        """Transcribe audio using the loaded model"""
+        import torch
+
+        # Fix for FunASR thread count drift bug (GitHub Issues #2652, #2770)
+        # After processing, FunASR can modify ncpu in kwargs causing thread count
+        # to drift (e.g., from 4 to 1), leading to massive slowdown or hang.
+        torch.set_num_threads(4)
 
         # Run in thread pool to not block event loop
         loop = asyncio.get_event_loop()
@@ -261,8 +291,18 @@ class DictationApp:
             )
         )
 
+        # Reset thread count after inference to prevent drift
+        torch.set_num_threads(4)
+
         if res and res[0].get("text"):
-            return rich_transcription_postprocess(res[0]["text"])
+            text = res[0]["text"]
+            # SenseVoice outputs emotion/event tags that need postprocessing
+            # Paraformer outputs plain text - postprocess handles both gracefully
+            try:
+                from funasr.utils.postprocess_utils import rich_transcription_postprocess
+                return rich_transcription_postprocess(text)
+            except Exception:
+                return text  # Fallback for non-SenseVoice models
         return ""
 
     # # LLM post-processing disabled for now
@@ -364,13 +404,13 @@ def setup_async_loop(chinese, model):
     loop.run_forever()
 
 
-def start_app(chinese='tw', model_size='small'):
+def start_app(chinese='tw', model_size='small', device=None):
     """Start the application with NSApplication event loop."""
     # Load model in main thread so user sees progress
     print("=" * 50)
     print("  SenseVoice Local Dictation")
     print("=" * 50)
-    model = load_sensevoice_model(model_size)
+    model = load_sensevoice_model(model_size, force_device=device)
 
     # Start asyncio event loop in a separate thread
     async_thread = threading.Thread(target=setup_async_loop, args=(chinese, model), daemon=True)
@@ -413,7 +453,12 @@ if __name__ == "__main__":
     parser.add_argument(
         '--model', '-m',
         default='small',
-        help='Model: small (default) or custom model ID. Note: SenseVoiceLarge is NOT publicly released.'
+        help='Model: small/sensevoice (default, multilingual), paraformer/paraformer-large (Chinese, faster), or custom model ID'
+    )
+    parser.add_argument(
+        '--device', '-d',
+        default=None,
+        help='Force device: cpu, mps, or cuda:0 (default: auto-detect)'
     )
     args = parser.parse_args()
-    start_app(chinese=args.chinese, model_size=args.model)
+    start_app(chinese=args.chinese, model_size=args.model, device=args.device)
