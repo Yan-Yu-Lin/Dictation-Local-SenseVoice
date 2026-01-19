@@ -1,0 +1,174 @@
+# Dictation Local SenseVoice
+
+Local/offline dictation app using **SenseVoice** model. Press global hotkey to start/stop recording, transcription is automatically pasted to the active app.
+
+## Platform Support
+
+| Platform | Status | Notes |
+|----------|--------|-------|
+| **macOS** | Supported | Uses `quickmachotkey` for global hotkeys, `pyobjc` for Cocoa integration |
+| Linux | Not supported | `quickmachotkey` is macOS-only |
+| Windows | Not supported | `quickmachotkey` is macOS-only |
+
+> **Note**: This app uses `quickmachotkey` for global hotkey interception, which is a macOS-specific library that hooks into the Carbon Event Manager. Cross-platform support would require significant refactoring to use platform-specific hotkey libraries.
+
+## Features
+
+- **Fully offline** - No API keys needed, runs locally on your machine
+- **Global hotkey** - `Cmd+Option+Control+D` (or Hyper+D) works from any app
+- **Auto-paste** - Transcription is pasted directly to active app
+- **Chinese conversion** - Simplified → Traditional (OpenCC)
+- **Sound feedback** - macOS system sounds for start/stop
+- **Apple Silicon optimized** - Uses MPS (Metal Performance Shaders) for GPU acceleration
+
+## Usage
+
+```bash
+# Traditional Chinese output (default)
+uv run python dictation.py --chinese tw
+
+# Simplified Chinese output
+uv run python dictation.py --chinese cn
+```
+
+**Controls:**
+- `Cmd+Option+Control+D` - Start/stop recording
+- `Ctrl+C` - Exit the app
+
+---
+
+## About SenseVoice
+
+### Overview
+
+**SenseVoice** is an open-source speech recognition model developed by **Alibaba DAMO Academy (達摩院)**. It's designed for high-accuracy multilingual speech-to-text with additional capabilities like emotion recognition and audio event detection.
+
+### Links
+
+| Resource | URL |
+|----------|-----|
+| **GitHub Repository** | https://github.com/FunAudioLLM/SenseVoice |
+| **Model on ModelScope** | https://modelscope.cn/models/iic/SenseVoiceSmall |
+| **FunASR Framework** | https://github.com/modelscope/FunASR |
+| **Paper (arXiv)** | https://arxiv.org/abs/2407.04051 |
+
+### Model Variants
+
+| Model | Size | Status |
+|-------|------|--------|
+| `iic/SenseVoiceSmall` | ~800MB | **Publicly available** (used in this app) |
+| `SenseVoiceLarge` | ~2GB | Mentioned in paper but **NOT publicly released** |
+
+### Supported Languages
+
+- `zh` - Chinese (Mandarin)
+- `en` - English
+- `yue` - Cantonese (粵語)
+- `ja` - Japanese
+- `ko` - Korean
+- `auto` - Auto-detect (default)
+
+### Additional Features
+
+SenseVoice can also detect:
+- **Emotions**: Happy, sad, angry, fearful, disgusted, surprised
+- **Audio Events**: Laughter, applause, coughing, crying, etc.
+
+These are included in the raw output but stripped by `rich_transcription_postprocess()`.
+
+### Technical Details
+
+```python
+from funasr import AutoModel
+
+model = AutoModel(
+    model="iic/SenseVoiceSmall",    # Model ID
+    trust_remote_code=True,          # Required for custom model code
+    vad_model="fsmn-vad",            # Voice Activity Detection model
+    vad_kwargs={"max_single_segment_time": 30000},  # Max segment: 30s
+    device="mps",                    # mps/cuda/cpu
+    disable_update=True,             # Don't check for updates
+)
+
+result = model.generate(
+    input="audio.wav",
+    cache={},
+    language="auto",      # Language detection
+    use_itn=True,         # Inverse Text Normalization (numbers, dates)
+    batch_size_s=60,      # Batch size in seconds
+    merge_vad=True,       # Merge VAD segments
+    merge_length_s=15,    # Merge threshold
+)
+```
+
+### Performance
+
+On Apple Silicon (M3 Pro):
+- **RAM usage**: ~1-1.5 GB total
+- **RTF (Real-Time Factor)**: ~0.3-0.5x (faster than real-time)
+- **First load**: Downloads model (~800MB), caches to `~/.cache/modelscope/`
+
+### Framework: FunASR
+
+SenseVoice runs on **FunASR**, Alibaba's open-source speech recognition toolkit.
+
+```
+FunASR (Fundamental ASR)
+├── SenseVoice - Multilingual ASR
+├── Paraformer - Chinese ASR
+├── Whisper - OpenAI Whisper wrapper
+└── Various VAD, punctuation models
+```
+
+GitHub: https://github.com/modelscope/FunASR
+
+---
+
+## Comparison with Other STT Solutions
+
+| Solution | Type | Languages | Offline | Speed | Notes |
+|----------|------|-----------|---------|-------|-------|
+| **SenseVoice** | Local | zh/en/yue/ja/ko | Yes | Fast | This app |
+| Whisper | Local | 99+ | Yes | Medium | OpenAI, larger models |
+| faster-whisper | Local | 99+ | Yes | Fast | CTranslate2 optimized |
+| ElevenLabs Scribe | Cloud | Many | No | Fast | Requires API key |
+| Deepgram | Cloud | Many | No | Fast | Requires API key |
+
+---
+
+## Dependencies & Licenses
+
+| Package | Purpose | License |
+|---------|---------|---------|
+| `funasr` | FunASR framework (STT) | MIT |
+| `torch`, `torchaudio` | PyTorch for model inference | BSD-3-Clause |
+| `sounddevice` | Audio recording | MIT |
+| `opencc` | Chinese character conversion | Apache-2.0 |
+| `quickmachotkey` | Global hotkey interception (macOS) | MIT |
+| `pyobjc-*` | macOS Cocoa bindings | MIT |
+| `pynput` | Keyboard simulation for paste | LGPL-3.0 |
+| `pyperclip` | Clipboard access | BSD-3-Clause |
+
+All dependencies use permissive open-source licenses (MIT, BSD, Apache 2.0) or LGPL (pynput - used as a library, not modified).
+
+---
+
+## Troubleshooting
+
+### Model download slow
+First run downloads from ModelScope China servers. Be patient or use a VPN.
+
+### MPS errors
+If you get MPS (Metal) errors, the model will auto-fallback to CPU.
+
+### Hotkey not working
+Make sure Terminal/iTerm has Accessibility permissions in System Settings.
+
+### No audio input
+Check microphone permissions for Terminal in System Settings → Privacy & Security → Microphone.
+
+---
+
+## License
+
+This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
