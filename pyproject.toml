@@ -21,4 +21,9 @@ dependencies = [
     "transformers>=4.40.0",
     "zhconv>=1.4.3",
     "whisper_normalizer>=0.0.5",
+    # Benchmark dependencies
+    "elevenlabs>=1.0.0",
+    "pydub>=0.25.1",
+    "python-dotenv>=1.0.0",
+    "psutil>=7.2.1",
 ]

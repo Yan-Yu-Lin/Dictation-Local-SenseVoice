@@ -14,3 +14,9 @@ wheels/
 
 # Environment variables
 .env
+
+# Benchmark recordings
+recordings/
+
+# Large YouTube test video file
+youtube_test/video.wav
