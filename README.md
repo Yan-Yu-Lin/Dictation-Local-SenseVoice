@@ -12,6 +12,21 @@ Local/offline dictation app using **SenseVoice** model. Press global hotkey to s
 
 > **Note**: This app uses `quickmachotkey` for global hotkey interception, which is a macOS-specific library that hooks into the Carbon Event Manager. Cross-platform support would require significant refactoring to use platform-specific hotkey libraries.
 
+## Quick Start
+
+```bash
+# Clone and install dependencies
+git clone https://github.com/Yan-Yu-Lin/Dictation-Local-SenseVoice.git
+cd Dictation-Local-SenseVoice
+uv sync
+
+# Run dictation (requires macOS)
+uv run python dictation.py --chinese tw
+
+# Run benchmarks
+uv run python benchmark.py
+```
+
 ## Features
 
 - **Fully offline** - No API keys needed, runs locally on your machine
@@ -100,8 +115,8 @@ To benchmark with a new YouTube video:
 
 ```bash
 # Download audio and subtitles
-yt-dlp -x --audio-format wav -o "youtube_test/video.wav" "VIDEO_URL"
-yt-dlp --write-subs --sub-lang zh-Hant --skip-download -o "youtube_test/%(id)s" "VIDEO_URL"
+yt-dlp -x --audio-format wav -o "youtube_test/video.wav" "https://www.youtube.com/watch?v=56-dpUWm-sA"
+yt-dlp --write-subs --sub-lang zh-Hant --skip-download -o "youtube_test/%(id)s" "https://www.youtube.com/watch?v=56-dpUWm-sA"
 
 # Extract segments (example: 33s-50s)
 ffmpeg -i youtube_test/video.wav -ss 00:00:33 -to 00:00:50 -ar 16000 -ac 1 youtube_test/segment_01.wav
