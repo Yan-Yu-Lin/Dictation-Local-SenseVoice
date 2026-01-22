@@ -44,8 +44,9 @@ from pydub import AudioSegment
 
 # Script directory for model paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_RECORDINGS_DIR = os.path.join(SCRIPT_DIR, "recordings")
-DEFAULT_OUTPUT_FILE = os.path.join(SCRIPT_DIR, "results", "benchmark_results.md")
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+DEFAULT_RECORDINGS_DIR = os.path.join(PROJECT_ROOT, "recordings")
+DEFAULT_OUTPUT_FILE = os.path.join(PROJECT_ROOT, "benchmark_results", "benchmark_results.md")
 
 
 def get_device_info():
@@ -193,7 +194,7 @@ class FunASRNanoRunner:
 
     def __init__(self, device: str):
         from funasr import AutoModel
-        remote_code_path = os.path.join(SCRIPT_DIR, "fun_asr_nano_model.py")
+        remote_code_path = os.path.join(PROJECT_ROOT, "models", "fun_asr_nano.py")
         self.model = AutoModel(
             model="FunAudioLLM/Fun-ASR-Nano-2512",
             trust_remote_code=True,

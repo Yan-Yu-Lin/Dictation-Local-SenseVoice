@@ -42,6 +42,7 @@ import opencc
 from pydub import AudioSegment
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 
 # OpenCC converter for Simplified -> Traditional Chinese
 S2T_CONVERTER = opencc.OpenCC('s2t')
@@ -347,7 +348,7 @@ class ParaformerRunner(BaseRunner):
 class FunASRNanoRunner(BaseRunner):
     def __init__(self, device: str):
         from funasr import AutoModel
-        remote_code_path = os.path.join(SCRIPT_DIR, "fun_asr_nano_model.py")
+        remote_code_path = os.path.join(PROJECT_ROOT, "models", "fun_asr_nano.py")
         self.model = AutoModel(
             model="FunAudioLLM/Fun-ASR-Nano-2512",
             trust_remote_code=True,
@@ -742,17 +743,17 @@ def main():
     )
     parser.add_argument(
         '--video', '-v',
-        default=os.path.join(SCRIPT_DIR, "youtube_test", "video.wav"),
+        default=os.path.join(PROJECT_ROOT, "youtube_test", "video.wav"),
         help='Path to full video WAV file'
     )
     parser.add_argument(
         '--srt', '-s',
-        default=os.path.join(SCRIPT_DIR, "youtube_test", "zh-tw.srt"),
+        default=os.path.join(PROJECT_ROOT, "youtube_test", "zh-tw.srt"),
         help='Path to SRT file'
     )
     parser.add_argument(
         '--output', '-o',
-        default=os.path.join(SCRIPT_DIR, "results", "full_benchmark_results.md"),
+        default=os.path.join(PROJECT_ROOT, "benchmark_results", "full_benchmark_results.md"),
         help='Output markdown file'
     )
     parser.add_argument(

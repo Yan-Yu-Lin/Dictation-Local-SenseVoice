@@ -150,7 +150,7 @@ def load_sensevoice_model(model_size="small", force_device=None):
     # Build model kwargs based on model type
     if is_fun_asr_nano:
         # Fun-ASR-Nano needs local model.py for custom architecture
-        remote_code_path = os.path.join(SCRIPT_DIR, "fun_asr_nano_model.py")
+        remote_code_path = os.path.join(SCRIPT_DIR, "models", "fun_asr_nano.py")
         model_kwargs = {
             "model": model_id,
             "trust_remote_code": True,
