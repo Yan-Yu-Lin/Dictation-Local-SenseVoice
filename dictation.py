@@ -352,14 +352,15 @@ def load_sensevoice_model(model_size="small", force_device=None):
 class DictationApp:
     def __init__(self, chinese="tw", model=None, is_fun_asr_nano=False):
         self.is_recording = False
-        self.audio_chunks = []
-        self.recording_thread = None
-        self.stop_event = threading.Event()
         self.is_fun_asr_nano = is_fun_asr_nano
         self.session_id = 0
         self.session_lock = asyncio.Lock()
         self.paste_lock = asyncio.Lock()
         self.finalize_task: Optional[asyncio.Task] = None
+        # Per-session state (isolated so new sessions never clobber old ones)
+        self._current_stop_event: Optional[threading.Event] = None
+        self._current_recording_thread: Optional[threading.Thread] = None
+        self._current_audio_chunks: Optional[list] = None
 
         # Initialize Chinese character converter
         self.chinese_variant = chinese
@@ -380,14 +381,15 @@ class DictationApp:
         print(f"Press Cmd+Option+Control+{TRIGGER_KEY.upper()} to start/stop recording")
         print("(Or press your Hyper Key + D if you have it configured)\n")
 
-    def record_audio_thread(self):
-        """Record audio in background thread"""
+    @staticmethod
+    def _record_audio_loop(stop_event: threading.Event, audio_chunks: list):
+        """Record audio in background thread. Uses per-session event and list."""
         with sd.InputStream(
             samplerate=SAMPLE_RATE, channels=CHANNELS, dtype=np.int16
         ) as stream:
-            while not self.stop_event.is_set():
+            while not stop_event.is_set():
                 data, _ = stream.read(int(SAMPLE_RATE * 0.1))  # Read 0.1 seconds
-                self.audio_chunks.append(data.copy())
+                audio_chunks.append(data.copy())
 
     async def start_recording(self):
         """Start recording audio"""
@@ -397,8 +399,12 @@ class DictationApp:
 
             self.is_recording = True
             self.session_id += 1
-            self.audio_chunks = []
-            self.stop_event.clear()
+
+            # Create per-session isolated state
+            stop_event = threading.Event()
+            audio_chunks = []
+            self._current_stop_event = stop_event
+            self._current_audio_chunks = audio_chunks
 
         # Play start sound and show overlay
         play_sound(SOUND_START, SOUND_START_VOLUME)
@@ -406,9 +412,12 @@ class DictationApp:
 
         print("\n🎙️  Recording started... Speak now!")
 
-        # Start recording thread
-        self.recording_thread = threading.Thread(target=self.record_audio_thread)
-        self.recording_thread.start()
+        # Start recording thread with its own stop_event and chunk list
+        thread = threading.Thread(
+            target=self._record_audio_loop, args=(stop_event, audio_chunks)
+        )
+        thread.start()
+        self._current_recording_thread = thread
 
     async def stop_recording(self):
         """Stop recording — returns instantly, transcription runs in background"""
@@ -419,8 +428,10 @@ class DictationApp:
             current_session = self.session_id
             self.is_recording = False
 
-            # Signal recording thread to stop
-            self.stop_event.set()
+            # Signal THIS session's recording thread to stop (per-session event)
+            stop_event = self._current_stop_event
+            if stop_event:
+                stop_event.set()
 
             # Play stop sound, switch overlay to finalizing
             play_sound(SOUND_STOP, SOUND_STOP_VOLUME)
@@ -428,12 +439,13 @@ class DictationApp:
             print("\n🛑 Recording stopped. Transcribing...")
 
             # Capture references for background finalization
-            old_thread = self.recording_thread
-            old_chunks = self.audio_chunks
+            old_thread = self._current_recording_thread
+            old_chunks = self._current_audio_chunks
 
-            # Clear state so a new session can start immediately
-            self.recording_thread = None
-            self.audio_chunks = []
+            # Clear for next session
+            self._current_recording_thread = None
+            self._current_audio_chunks = None
+            self._current_stop_event = None
 
         # Kick off transcription in background (does NOT block the event loop)
         self.finalize_task = asyncio.create_task(
@@ -550,9 +562,10 @@ class DictationApp:
     def cleanup(self):
         """Clean up resources"""
         if self.is_recording:
-            self.stop_event.set()
-            if self.recording_thread:
-                self.recording_thread.join()
+            if self._current_stop_event:
+                self._current_stop_event.set()
+            if self._current_recording_thread:
+                self._current_recording_thread.join(timeout=2.0)
 
 
 # Global app instance
