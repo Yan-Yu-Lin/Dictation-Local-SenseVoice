@@ -12,6 +12,7 @@ Behavior:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import os
 import queue
@@ -45,6 +46,17 @@ MODELS = {
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+@contextlib.contextmanager
+def suppress_backend_output(enabled: bool):
+    if not enabled:
+        yield
+        return
+
+    with open(os.devnull, "w", encoding="utf-8") as devnull:
+        with contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
+            yield
+
+
 def format_hms(seconds: float) -> str:
     whole = int(seconds)
     ms = int((seconds - whole) * 1000)
@@ -66,11 +78,13 @@ def load_asr_model(
     model_size: str = "small",
     force_device: str | None = None,
     verbose: bool = True,
+    quiet_backend: bool = False,
 ):
     if verbose:
         print("Importing libraries...", end=" ", flush=True)
-    from funasr import AutoModel
-    import torch
+    with suppress_backend_output(quiet_backend):
+        from funasr import AutoModel
+        import torch
 
     if verbose:
         print("done")
@@ -136,36 +150,42 @@ def load_asr_model(
         if is_paraformer:
             model_kwargs["punc_model"] = "ct-punc"
 
-    model = AutoModel(**model_kwargs)
+    with suppress_backend_output(quiet_backend):
+        model = AutoModel(**model_kwargs)
     if verbose:
         print("Model loaded!")
     return model, is_fun_asr_nano
 
 
 def transcribe_file(
-    model, is_fun_asr_nano: bool, audio_path: Path, language: str = "auto"
+    model,
+    is_fun_asr_nano: bool,
+    audio_path: Path,
+    language: str = "auto",
+    quiet_backend: bool = False,
 ) -> str:
     import torch
 
     torch.set_num_threads(4)
-    if is_fun_asr_nano:
-        res = model.generate(
-            input=[str(audio_path)],
-            cache={},
-            batch_size=1,
-            language=language,
-            itn=True,
-        )
-    else:
-        res = model.generate(
-            input=str(audio_path),
-            cache={},
-            language=language,
-            use_itn=True,
-            batch_size_s=60,
-            merge_vad=True,
-            merge_length_s=15,
-        )
+    with suppress_backend_output(quiet_backend):
+        if is_fun_asr_nano:
+            res = model.generate(
+                input=[str(audio_path)],
+                cache={},
+                batch_size=1,
+                language=language,
+                itn=True,
+            )
+        else:
+            res = model.generate(
+                input=str(audio_path),
+                cache={},
+                language=language,
+                use_itn=True,
+                batch_size_s=60,
+                merge_vad=True,
+                merge_length_s=15,
+            )
     torch.set_num_threads(4)
 
     if not (res and res[0].get("text")):
@@ -365,6 +385,7 @@ class WorkerItem:
 class RealtimeMeetingTranscriber:
     def __init__(self, args: argparse.Namespace):
         self.args = args
+        self.quiet_backend = args.display == "text"
         self.frame_samples = int(args.sample_rate * args.frame_ms / 1000)
         self.audio_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=4096)
         self.work_queue: queue.Queue[WorkerItem | None] = queue.Queue(maxsize=256)
@@ -374,6 +395,7 @@ class RealtimeMeetingTranscriber:
             args.model,
             args.device,
             verbose=(args.display != "text"),
+            quiet_backend=self.quiet_backend,
         )
         self.converter = opencc.OpenCC("s2t" if args.chinese == "tw" else "t2s")
 
@@ -447,7 +469,7 @@ class RealtimeMeetingTranscriber:
     def _append_plain_transcript(self, text: str) -> None:
         with self._transcript_lock:
             with self.transcript_plain_path.open("a", encoding="utf-8") as f:
-                f.write(text + "\n")
+                f.write(text + "\n\n")
 
     def _worker(self) -> None:
         while True:
@@ -467,6 +489,7 @@ class RealtimeMeetingTranscriber:
                 is_fun_asr_nano=self.is_fun_asr_nano,
                 audio_path=audio_path,
                 language=self.args.language,
+                quiet_backend=self.quiet_backend,
             ).strip()
 
             text = self.converter.convert(text) if text else ""
@@ -476,6 +499,7 @@ class RealtimeMeetingTranscriber:
                 line = f"{time_range} {text}"
                 if self.args.display == "text":
                     print(text)
+                    print("")
                 else:
                     print(line)
                     print(f"  audio: {audio_path}")
